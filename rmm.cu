@@ -43,35 +43,46 @@ void rmm_gpu(int *matA, int *matB, int *matC, int M, int N, int K)
 
     /* Preprocessing (if any) goes here */
 
-    //not for now
+    void *ptrA = nullptr;
+    cudaError_t gpu_matA = cudaMalloc(&ptrA, M * N * sizeof(int));
+    if(gpu_matA != cudaSuccess) {
+        cout << "Error allocating memory for matA on device: " << cudaGetErrorString(gpu_matA) << endl;
+        return;
+    }
+
+    void *ptrB = nullptr;
+    cudaError_t gpu_matB = cudaMalloc(&ptrB, N * K * sizeof(int));
+    if(gpu_matB != cudaSuccess) {
+        cout << "Error allocating memory for matB on device: " << cudaGetErrorString(gpu_matB) << endl;
+        return;
+    }
+
+    void *ptrC = nullptr;
+    cudaError_t gpu_matC = cudaMalloc(&ptrC, (M/2) * (K/2) * sizeof(int));
+    if(gpu_matC != cudaSuccess) {
+        cout << "Error allocating memory for matC on device: " << cudaGetErrorString(gpu_matC) << endl;
+        return;
+    }
+
 
     cudaEventRecord(cpy_H2D_start);
     /* Copying array(s) from host to device goes here */
+
+    cudaError_t copyA = cudaMemcpy(ptrA, matA, M * N * sizeof(int), cudaMemcpyHostToDevice);
+    if(copyA != cudaSuccess) {
+        cout << "Error copying matA from host to device: " << cudaGetErrorString(copyA) << endl;
+        return;
+    }
+
+    cudaError_t copyB = cudaMemcpy(ptrB, matB, N * K * sizeof(int), cudaMemcpyHostToDevice);
+    if(copyB != cudaSuccess) {
+        cout << "Error copying matB from host to device: " << cudaGetErrorString(copyB) << endl;
+        return;
+    }
+    
+
     cudaEventRecord(cpy_H2D_end);
     cudaEventSynchronize(cpy_H2D_end);
-
-    void ptrA = nullptr;
-    cudaError_t matA = cudaMalloc(&ptrA, M * N * sizeof(int));
-    if(matA != cudaSuccess) {
-        cout << "Error allocating memory for matA on device: " << cudaGetErrorString(matA) << endl;
-        return;
-    }
-    cudaError_t copyA = cudaMemcpy(ptrA, matA, M * N * sizeof(int));
-
-    void ptrB = nullptr;
-    cudaError_t matB = cudaMalloc(&ptrB, N * K * sizeof(int));
-    if(matB != cudaSuccess) {
-        cout << "Error allocating memory for matB on device: " << cudaGetErrorString(matB) << endl;
-        return;
-    }
-    cudaError_t copyB = cudaMemcpy(ptrB, matB, N * K * sizeof(int));
-
-    void ptrC = nullptr;
-    cudaError_t matC = cudaMalloc(&ptrC, (M/2) * (K/2) * sizeof(int));
-    if(matC != cudaSuccess) {
-        cout << "Error allocating memory for matC on device: " << cudaGetErrorString(matC) << endl;
-        return;
-    }
 
     cudaEventRecord(comp_start);
     /* Launching the GPU kernel to do the computation goes here */
