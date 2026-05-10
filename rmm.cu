@@ -117,10 +117,29 @@ void rmm_gpu(int *matA, int *matB, int *matC, int M, int N, int K)
 
     cudaEventRecord(cpy_D2H_start);
     /* Copying array(s) from device to host goes here */
+    cudaError_t copyC = cudaMemcpy(matC, ptrC, (M/2) * (K/2) * sizeof(int), cudaMemcpyDeviceToHost);
+    if(copyC != cudaSuccess) { 
+        cout << "Error copying matC from device to host: " << cudaGetErrorString(copyC) << endl;
+        return;
+    }
     cudaEventRecord(cpy_D2H_end);
     cudaEventSynchronize(cpy_D2H_end);
 
     /* Postprocessing (if any) goes here */
+    cudaError_t freeA = cudaFree(ptrA);
+    if(freeA != cudaSuccess) {
+        cout << "Error freeing memory for matA on device: " << cudaGetErrorString(freeA) << endl;
+    }
+
+    cudaError_t freeB = cudaFree(ptrB);
+    if(freeB != cudaSuccess) {
+        cout << "Error freeing memory for matB on device: " << cudaGetErrorString(freeB) << endl;
+    }
+
+    cudaError_t freeC = cudaFree(ptrC);
+    if(freeC != cudaSuccess) {
+        cout << "Error freeing memory for matC on device: " << cudaGetErrorString(freeC) << endl;
+    }
 
     /* Display timing statistics */
     float time;
