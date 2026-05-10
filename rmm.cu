@@ -1,8 +1,8 @@
 /*
 ============================================================================
 Filename    : rmm.cu
-Author      : Your name goes here
-SCIPER      : Your SCIPER number
+Author      : Guillaume Lepin & Neha Chakraborty
+SCIPER      : 381189 & 373384
 ============================================================================
 */
 
@@ -43,10 +43,35 @@ void rmm_gpu(int *matA, int *matB, int *matC, int M, int N, int K)
 
     /* Preprocessing (if any) goes here */
 
+    //not for now
+
     cudaEventRecord(cpy_H2D_start);
     /* Copying array(s) from host to device goes here */
     cudaEventRecord(cpy_H2D_end);
     cudaEventSynchronize(cpy_H2D_end);
+
+    void ptrA = nullptr;
+    cudaError_t matA = cudaMalloc(&ptrA, M * N * sizeof(int));
+    if(matA != cudaSuccess) {
+        cout << "Error allocating memory for matA on device: " << cudaGetErrorString(matA) << endl;
+        return;
+    }
+    cudaError_t copyA = cudaMemcpy(ptrA, matA, M * N * sizeof(int));
+
+    void ptrB = nullptr;
+    cudaError_t matB = cudaMalloc(&ptrB, N * K * sizeof(int));
+    if(matB != cudaSuccess) {
+        cout << "Error allocating memory for matB on device: " << cudaGetErrorString(matB) << endl;
+        return;
+    }
+    cudaError_t copyB = cudaMemcpy(ptrB, matB, N * K * sizeof(int));
+
+    void ptrC = nullptr;
+    cudaError_t matC = cudaMalloc(&ptrC, (M/2) * (K/2) * sizeof(int));
+    if(matC != cudaSuccess) {
+        cout << "Error allocating memory for matC on device: " << cudaGetErrorString(matC) << endl;
+        return;
+    }
 
     cudaEventRecord(comp_start);
     /* Launching the GPU kernel to do the computation goes here */
