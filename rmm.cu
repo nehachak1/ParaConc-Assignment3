@@ -86,6 +86,25 @@ void rmm_gpu(int *matA, int *matB, int *matC, int M, int N, int K)
 
     cudaEventRecord(comp_start);
     /* Launching the GPU kernel to do the computation goes here */
+
+    __global__ void rmm_kernel(int *ptrA, int *ptrB, int *ptrC, int M, int N, int K) {
+        int row = blockIdx.y * blockDim.y + threadIdx.y;
+        int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+        if(row < M/2 && col < K/2) {
+            int sum = 0;
+            for(int aoff = 0; aoff < 2; aoff++) {
+                for(int boff = 0; boff < 2; boff++) {
+                    for(int kdx = 0; kdx < N; kdx++) {
+                        sum += ptrA[(row*2 + aoff)*N + kdx] * ptrB[kdx*K + col*2 + boff];
+                    }
+                }
+            }
+            ptrC[row*(K/2) + col] = sum;
+        }
+        // Kernel implementation goes here
+    }
+
     cudaEventRecord(comp_end);
     cudaEventSynchronize(comp_end);
 
