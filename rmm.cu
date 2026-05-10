@@ -29,6 +29,24 @@ void rmm_cpu(int *matA, int *matB, int *matC, int M, int N, int K)
     }
 }
 
+__global__ void rmm_kernel(int *ptrA, int *ptrB, int *ptrC, int M, int N, int K) {
+        int row = blockIdx.y * blockDim.y + threadIdx.y;
+        int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+        if(row < M/2 && col < K/2) {
+            int sum = 0;
+            for(int aoff = 0; aoff < 2; aoff++) {
+                for(int boff = 0; boff < 2; boff++) {
+                    for(int kdx = 0; kdx < N; kdx++) {
+                        sum += ptrA[(row*2 + aoff)*N + kdx] * ptrB[kdx*K + col*2 + boff];
+                    }
+                }
+            }
+            ptrC[row*(K/2) + col] = sum;
+        }
+        // Kernel implementation goes here
+    }
+
 /* GPU Optimized Function */
 void rmm_gpu(int *matA, int *matB, int *matC, int M, int N, int K)
 {
@@ -81,29 +99,18 @@ void rmm_gpu(int *matA, int *matB, int *matC, int M, int N, int K)
     }
     
 
+
     cudaEventRecord(cpy_H2D_end);
     cudaEventSynchronize(cpy_H2D_end);
 
     cudaEventRecord(comp_start);
     /* Launching the GPU kernel to do the computation goes here */
 
-    __global__ void rmm_kernel(int *ptrA, int *ptrB, int *ptrC, int M, int N, int K) {
-        int row = blockIdx.y * blockDim.y + threadIdx.y;
-        int col = blockIdx.x * blockDim.x + threadIdx.x;
+    dim3 blockDim(16, 16);
+    dim3 gridDim((K/2 + blockDim.x - 1) / blockDim.x, 
+                 (M/2 + blockDim.y - 1) / blockDim.y);
 
-        if(row < M/2 && col < K/2) {
-            int sum = 0;
-            for(int aoff = 0; aoff < 2; aoff++) {
-                for(int boff = 0; boff < 2; boff++) {
-                    for(int kdx = 0; kdx < N; kdx++) {
-                        sum += ptrA[(row*2 + aoff)*N + kdx] * ptrB[kdx*K + col*2 + boff];
-                    }
-                }
-            }
-            ptrC[row*(K/2) + col] = sum;
-        }
-        // Kernel implementation goes here
-    }
+    rmm_kernel<<<gridDim, blockDim>>>(static_cast<int*>(ptrA), static_cast<int*>(ptrB), static_cast<int*>(ptrC), M, N, K);
 
     cudaEventRecord(comp_end);
     cudaEventSynchronize(comp_end);
