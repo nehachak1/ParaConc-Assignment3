@@ -4,7 +4,7 @@ Filename    : rmm_imp2.cu
 Author      : Guillaume Lepin & Neha Chakraborty
 SCIPER      : 381189 & 373384
 ============================================================================
-Optimization: GPU reduction, then GPU matrix multiplication with one thread per output element 
+Optimization: Reduces A/B on the GPU first (not the CPU), then uses a GPU multiply
 */
 
 #include <iostream>

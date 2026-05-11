@@ -4,7 +4,7 @@ Filename    : rmm_imp3.cu
 Author      : Guillaume Lepin & Neha Chakraborty
 SCIPER      : 381189 & 373384
 ============================================================================
-Optimization: reduce A row-pairs and B column-pairs on the GPU, then run a shared-memory tiled
+Optimization: Fuses reduction and multiplication into one shared-memory tiled GPU kernel
 */
 
 #include <iostream>
