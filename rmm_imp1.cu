@@ -40,7 +40,7 @@ __global__ void rmm_kernel(int *ptrA, int *ptrB, int *ptrC, int M, int N, int K)
             }
             ptrC[row*(K/2) + col] = sum;
         }
-        // Kernel implementation goes here
+        // Kernel implementation goes here - Neha: I did this in a later implementation, so we can see it clearly :))
 }
 
 /* GPU Optimized Function */
@@ -154,6 +154,9 @@ void rmm_gpu(int *matA, int *matB, int *matC, int M, int N, int K)
     if(freeC != cudaSuccess) {
         cout << "Error freeing memory for matC on device: " << cudaGetErrorString(freeC) << endl;
     }
+
+    free(reducedA);
+    free(reducedB);
 
     /* Display timing statistics */
     float time;

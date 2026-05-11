@@ -1,9 +1,10 @@
 /*
 ============================================================================
-Filename    : rmm.cu
+Filename    : rmm_imp3.cu
 Author      : Guillaume Lepin & Neha Chakraborty
 SCIPER      : 381189 & 373384
 ============================================================================
+Optimization: reduce A row-pairs and B column-pairs on the GPU, then run a shared-memory tiled
 */
 
 #include <iostream>
@@ -13,7 +14,6 @@ SCIPER      : 381189 & 373384
 using namespace std;
 
 #define TILE_SIZE 16
-#define REDUCE_BLOCK_SIZE 256
 
 static bool check_cuda(cudaError_t err, const char *message)
 {
@@ -41,38 +41,9 @@ void rmm_cpu(int *matA, int *matB, int *matC, int M, int N, int K)
     }
 }
 
-__global__ void reduceA_kernel(const int *__restrict__ matA,
-                               int *__restrict__ redA,
-                               int M, int N)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = (M / 2) * N;
-
-    if(idx < total) {
-        int row = idx / N;
-        int col = idx % N;
-        redA[idx] = matA[(2 * row) * N + col] + matA[(2 * row + 1) * N + col];
-    }
-}
-
-__global__ void reduceB_kernel(const int *__restrict__ matB,
-                               int *__restrict__ redB,
-                               int N, int K)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int outCols = K / 2;
-    int total = N * outCols;
-
-    if(idx < total) {
-        int row = idx / outCols;
-        int col = idx % outCols;
-        redB[idx] = matB[row * K + 2 * col] + matB[row * K + 2 * col + 1];
-    }
-}
-
-__global__ void rmm_kernel(const int *__restrict__ redA,
-                           const int *__restrict__ redB,
-                           int *__restrict__ matC,
+__global__ void rmm_kernel(const int *__restrict__ ptrA,
+                           const int *__restrict__ ptrB,
+                           int *__restrict__ ptrC,
                            int M, int N, int K)
 {
     __shared__ int tileA[TILE_SIZE][TILE_SIZE];
@@ -85,17 +56,19 @@ __global__ void rmm_kernel(const int *__restrict__ redA,
     int sum = 0;
 
     for(int tileStart = 0; tileStart < N; tileStart += TILE_SIZE) {
-        int aCol = tileStart + threadIdx.x;
-        int bRow = tileStart + threadIdx.y;
+        int kA = tileStart + threadIdx.x;
+        int kB = tileStart + threadIdx.y;
 
-        if(row < outRows && aCol < N) {
-            tileA[threadIdx.y][threadIdx.x] = redA[row * N + aCol];
+        if(row < outRows && kA < N) {
+            tileA[threadIdx.y][threadIdx.x] =
+                ptrA[(2 * row) * N + kA] + ptrA[(2 * row + 1) * N + kA];
         } else {
             tileA[threadIdx.y][threadIdx.x] = 0;
         }
 
-        if(bRow < N && col < outCols) {
-            tileB[threadIdx.y][threadIdx.x] = redB[bRow * outCols + col];
+        if(kB < N && col < outCols) {
+            tileB[threadIdx.y][threadIdx.x] =
+                ptrB[kB * K + 2 * col] + ptrB[kB * K + 2 * col + 1];
         } else {
             tileB[threadIdx.y][threadIdx.x] = 0;
         }
@@ -111,7 +84,7 @@ __global__ void rmm_kernel(const int *__restrict__ redA,
     }
 
     if(row < outRows && col < outCols) {
-        matC[row * outCols + col] = sum;
+        ptrC[row * outCols + col] = sum;
     }
 }
 
@@ -129,29 +102,21 @@ void rmm_gpu(int *matA, int *matB, int *matC, int M, int N, int K)
     int *ptrA = nullptr;
     int *ptrB = nullptr;
     int *ptrC = nullptr;
-    int *redA = nullptr;
-    int *redB = nullptr;
 
     int outRows = M / 2;
     int outCols = K / 2;
     size_t sizeA = (size_t) M * N * sizeof(int);
     size_t sizeB = (size_t) N * K * sizeof(int);
     size_t sizeC = (size_t) outRows * outCols * sizeof(int);
-    size_t sizeRedA = (size_t) outRows * N * sizeof(int);
-    size_t sizeRedB = (size_t) N * outCols * sizeof(int);
 
     bool ok = true;
     ok = ok && check_cuda(cudaMalloc((void **) &ptrA, sizeA), "Error allocating memory for matA on device");
     ok = ok && check_cuda(cudaMalloc((void **) &ptrB, sizeB), "Error allocating memory for matB on device");
     ok = ok && check_cuda(cudaMalloc((void **) &ptrC, sizeC), "Error allocating memory for matC on device");
-    ok = ok && check_cuda(cudaMalloc((void **) &redA, sizeRedA), "Error allocating memory for reduced matA on device");
-    ok = ok && check_cuda(cudaMalloc((void **) &redB, sizeRedB), "Error allocating memory for reduced matB on device");
     if(!ok) {
         cudaFree(ptrA);
         cudaFree(ptrB);
         cudaFree(ptrC);
-        cudaFree(redA);
-        cudaFree(redB);
         return;
     }
 
@@ -167,32 +132,23 @@ void rmm_gpu(int *matA, int *matB, int *matC, int M, int N, int K)
         cudaFree(ptrA);
         cudaFree(ptrB);
         cudaFree(ptrC);
-        cudaFree(redA);
-        cudaFree(redB);
         return;
     }
 
     cudaEventRecord(comp_start);
 
-    int redABlocks = (outRows * N + REDUCE_BLOCK_SIZE - 1) / REDUCE_BLOCK_SIZE;
-    int redBBlocks = (N * outCols + REDUCE_BLOCK_SIZE - 1) / REDUCE_BLOCK_SIZE;
-    reduceA_kernel<<<redABlocks, REDUCE_BLOCK_SIZE>>>(ptrA, redA, M, N);
-    reduceB_kernel<<<redBBlocks, REDUCE_BLOCK_SIZE>>>(ptrB, redB, N, K);
-
     dim3 blockDim(TILE_SIZE, TILE_SIZE);
     dim3 gridDim((outCols + TILE_SIZE - 1) / TILE_SIZE,
                  (outRows + TILE_SIZE - 1) / TILE_SIZE);
-    rmm_kernel<<<gridDim, blockDim>>>(redA, redB, ptrC, M, N, K);
+    rmm_kernel<<<gridDim, blockDim>>>(ptrA, ptrB, ptrC, M, N, K);
 
-    ok = check_cuda(cudaGetLastError(), "Error launching RMM kernels");
+    ok = check_cuda(cudaGetLastError(), "Error launching RMM kernel");
     cudaEventRecord(comp_end);
-    ok = ok && check_cuda(cudaEventSynchronize(comp_end), "Error executing RMM kernels");
+    ok = ok && check_cuda(cudaEventSynchronize(comp_end), "Error executing RMM kernel");
     if(!ok) {
         cudaFree(ptrA);
         cudaFree(ptrB);
         cudaFree(ptrC);
-        cudaFree(redA);
-        cudaFree(redB);
         return;
     }
 
@@ -206,8 +162,6 @@ void rmm_gpu(int *matA, int *matB, int *matC, int M, int N, int K)
     cudaFree(ptrA);
     cudaFree(ptrB);
     cudaFree(ptrC);
-    cudaFree(redA);
-    cudaFree(redB);
 
     if(!ok) {
         return;

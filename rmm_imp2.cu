@@ -1,9 +1,10 @@
 /*
 ============================================================================
-Filename    : rmm.cu
+Filename    : rmm_imp2.cu
 Author      : Guillaume Lepin & Neha Chakraborty
 SCIPER      : 381189 & 373384
 ============================================================================
+Optimization: GPU reduction, then GPU matrix multiplication with one thread per output element 
 */
 
 #include <iostream>
@@ -12,8 +13,7 @@ SCIPER      : 381189 & 373384
 #include <cuda_runtime.h>
 using namespace std;
 
-#define TILE_SIZE 16
-#define REDUCE_BLOCK_SIZE 256
+#define BLOCK_SIZE 256
 
 static bool check_cuda(cudaError_t err, const char *message)
 {
@@ -41,9 +41,7 @@ void rmm_cpu(int *matA, int *matB, int *matC, int M, int N, int K)
     }
 }
 
-__global__ void reduceA_kernel(const int *__restrict__ matA,
-                               int *__restrict__ redA,
-                               int M, int N)
+__global__ void reduceA_kernel(const int *matA, int *redA, int M, int N)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total = (M / 2) * N;
@@ -55,9 +53,7 @@ __global__ void reduceA_kernel(const int *__restrict__ matA,
     }
 }
 
-__global__ void reduceB_kernel(const int *__restrict__ matB,
-                               int *__restrict__ redB,
-                               int N, int K)
+__global__ void reduceB_kernel(const int *matB, int *redB, int N, int K)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int outCols = K / 2;
@@ -70,47 +66,18 @@ __global__ void reduceB_kernel(const int *__restrict__ matB,
     }
 }
 
-__global__ void rmm_kernel(const int *__restrict__ redA,
-                           const int *__restrict__ redB,
-                           int *__restrict__ matC,
-                           int M, int N, int K)
+__global__ void rmm_kernel(const int *redA, const int *redB, int *matC, int M, int N, int K)
 {
-    __shared__ int tileA[TILE_SIZE][TILE_SIZE];
-    __shared__ int tileB[TILE_SIZE][TILE_SIZE];
-
-    int row = blockIdx.y * TILE_SIZE + threadIdx.y;
-    int col = blockIdx.x * TILE_SIZE + threadIdx.x;
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
     int outRows = M / 2;
     int outCols = K / 2;
-    int sum = 0;
-
-    for(int tileStart = 0; tileStart < N; tileStart += TILE_SIZE) {
-        int aCol = tileStart + threadIdx.x;
-        int bRow = tileStart + threadIdx.y;
-
-        if(row < outRows && aCol < N) {
-            tileA[threadIdx.y][threadIdx.x] = redA[row * N + aCol];
-        } else {
-            tileA[threadIdx.y][threadIdx.x] = 0;
-        }
-
-        if(bRow < N && col < outCols) {
-            tileB[threadIdx.y][threadIdx.x] = redB[bRow * outCols + col];
-        } else {
-            tileB[threadIdx.y][threadIdx.x] = 0;
-        }
-
-        __syncthreads();
-
-        #pragma unroll
-        for(int kdx = 0; kdx < TILE_SIZE; kdx++) {
-            sum += tileA[threadIdx.y][kdx] * tileB[kdx][threadIdx.x];
-        }
-
-        __syncthreads();
-    }
 
     if(row < outRows && col < outCols) {
+        int sum = 0;
+        for(int kdx = 0; kdx < N; kdx++) {
+            sum += redA[row * N + kdx] * redB[kdx * outCols + col];
+        }
         matC[row * outCols + col] = sum;
     }
 }
@@ -174,14 +141,14 @@ void rmm_gpu(int *matA, int *matB, int *matC, int M, int N, int K)
 
     cudaEventRecord(comp_start);
 
-    int redABlocks = (outRows * N + REDUCE_BLOCK_SIZE - 1) / REDUCE_BLOCK_SIZE;
-    int redBBlocks = (N * outCols + REDUCE_BLOCK_SIZE - 1) / REDUCE_BLOCK_SIZE;
-    reduceA_kernel<<<redABlocks, REDUCE_BLOCK_SIZE>>>(ptrA, redA, M, N);
-    reduceB_kernel<<<redBBlocks, REDUCE_BLOCK_SIZE>>>(ptrB, redB, N, K);
+    int redABlocks = (outRows * N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int redBBlocks = (N * outCols + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    reduceA_kernel<<<redABlocks, BLOCK_SIZE>>>(ptrA, redA, M, N);
+    reduceB_kernel<<<redBBlocks, BLOCK_SIZE>>>(ptrB, redB, N, K);
 
-    dim3 blockDim(TILE_SIZE, TILE_SIZE);
-    dim3 gridDim((outCols + TILE_SIZE - 1) / TILE_SIZE,
-                 (outRows + TILE_SIZE - 1) / TILE_SIZE);
+    dim3 blockDim(16, 16);
+    dim3 gridDim((outCols + blockDim.x - 1) / blockDim.x,
+                 (outRows + blockDim.y - 1) / blockDim.y);
     rmm_kernel<<<gridDim, blockDim>>>(redA, redB, ptrC, M, N, K);
 
     ok = check_cuda(cudaGetLastError(), "Error launching RMM kernels");

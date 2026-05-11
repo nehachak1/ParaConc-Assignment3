@@ -1,9 +1,13 @@
 /*
 ============================================================================
-Filename    : rmm.cu
+Filename    : rmm_imp4.cu
 Author      : Guillaume Lepin & Neha Chakraborty
 SCIPER      : 381189 & 373384
 ============================================================================
+Optimization: reduce A and B on the GPU, then run a shared-memory tiled matrix
+multiplication on the reduced matrices. This avoids the CPU preprocessing in
+imp1, avoids the untiled global-memory multiply in imp2, and avoids recomputing
+the same reductions across output tiles as in imp3.
 */
 
 #include <iostream>
