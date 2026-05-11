@@ -45,7 +45,7 @@ __global__ void rmm_kernel(int *ptrA, int *ptrB, int *ptrC, int M, int N, int K)
             ptrC[row*(K/2) + col] = sum;
         }
         // Kernel implementation goes here
-    }
+}
 
 /* GPU Optimized Function */
 void rmm_gpu(int *matA, int *matB, int *matC, int M, int N, int K)
