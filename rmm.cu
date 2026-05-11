@@ -35,12 +35,8 @@ __global__ void rmm_kernel(int *ptrA, int *ptrB, int *ptrC, int M, int N, int K)
 
         if(row < M/2 && col < K/2) {
             int sum = 0;
-            for(int aoff = 0; aoff < 2; aoff++) {
-                for(int boff = 0; boff < 2; boff++) {
-                    for(int kdx = 0; kdx < N; kdx++) {
-                        sum += ptrA[(row*2 + aoff)*N + kdx] * ptrB[kdx*K + col*2 + boff];
-                    }
-                }
+            for(int kdx = 0; kdx < N; kdx++) {
+                sum += ptrA[row*N + kdx] * ptrB[kdx*(K/2) + col];
             }
             ptrC[row*(K/2) + col] = sum;
         }
@@ -61,19 +57,21 @@ void rmm_gpu(int *matA, int *matB, int *matC, int M, int N, int K)
 
     /* Preprocessing (if any) goes here */
 
-    void *ptrA = nullptr;
-    cudaError_t gpu_matA = cudaMalloc(&ptrA, M * N * sizeof(int));
-    if(gpu_matA != cudaSuccess) {
-        cout << "Error allocating memory for matA on device: " << cudaGetErrorString(gpu_matA) << endl;
-        return;
+    int *reducedA = (int *) malloc((M/2) * N * sizeof(int));
+    int *reducedB = (int *) malloc(N * (K/2) * sizeof(int));
+
+    for(int i = 0; i < M/2; i++){
+        for(int j = 0; j < N; j++){
+            reducedA[i*N + j] = matA[(i*2)*N + j] + matA[(i*2 + 1)*N + j];
+        }
     }
 
-    void *ptrB = nullptr;
-    cudaError_t gpu_matB = cudaMalloc(&ptrB, N * K * sizeof(int));
-    if(gpu_matB != cudaSuccess) {
-        cout << "Error allocating memory for matB on device: " << cudaGetErrorString(gpu_matB) << endl;
-        return;
+    for(int i = 0; i < N; i++){
+        for(int j = 0; j < K/2; j++){
+            reducedB[i*(K/2) + j] = matB[i*K + (j*2)] + matB[i*K + (j*2 + 1)];
+        }
     }
+
 
     void *ptrC = nullptr;
     cudaError_t gpu_matC = cudaMalloc(&ptrC, (M/2) * (K/2) * sizeof(int));
@@ -82,21 +80,37 @@ void rmm_gpu(int *matA, int *matB, int *matC, int M, int N, int K)
         return;
     }
 
+    void *ptrA_reduced = nullptr;
+    cudaError_t gpu_matA_reduced = cudaMalloc(&ptrA_reduced, (M/2) * N * sizeof(int));
+    if(gpu_matA_reduced != cudaSuccess) {
+        cout << "Error allocating memory for matA_reduced on device: " << cudaGetErrorString(gpu_matA_reduced) << endl;
+        return;
+    }
+
+     void *ptrB_reduced = nullptr;
+    cudaError_t gpu_matB_reduced = cudaMalloc(&ptrB_reduced, N * (K/2) * sizeof(int));
+    if(gpu_matB_reduced != cudaSuccess) {
+        cout << "Error allocating memory for matB_reduced on device: " << cudaGetErrorString(gpu_matB_reduced) << endl;
+        return;
+    }
+
 
     cudaEventRecord(cpy_H2D_start);
     /* Copying array(s) from host to device goes here */
 
-    cudaError_t copyA = cudaMemcpy(ptrA, matA, M * N * sizeof(int), cudaMemcpyHostToDevice);
+    cudaError_t copyA = cudaMemcpy(ptrA_reduced, reducedA, (M/2) * N * sizeof(int), cudaMemcpyHostToDevice);
     if(copyA != cudaSuccess) {
-        cout << "Error copying matA from host to device: " << cudaGetErrorString(copyA) << endl;
+        cout << "Error copying matA_reduced from host to device: " << cudaGetErrorString(copyA) << endl;
         return;
     }
 
-    cudaError_t copyB = cudaMemcpy(ptrB, matB, N * K * sizeof(int), cudaMemcpyHostToDevice);
+    cudaError_t copyB = cudaMemcpy(ptrB_reduced, reducedB, N * (K/2) * sizeof(int), cudaMemcpyHostToDevice);
     if(copyB != cudaSuccess) {
-        cout << "Error copying matB from host to device: " << cudaGetErrorString(copyB) << endl;
+        cout << "Error copying matB_reduced from host to device: " << cudaGetErrorString(copyB) << endl;
         return;
     }
+
+    
     
 
 
@@ -110,7 +124,7 @@ void rmm_gpu(int *matA, int *matB, int *matC, int M, int N, int K)
     dim3 gridDim((K/2 + blockDim.x - 1) / blockDim.x, 
                  (M/2 + blockDim.y - 1) / blockDim.y);
 
-    rmm_kernel<<<gridDim, blockDim>>>(static_cast<int*>(ptrA), static_cast<int*>(ptrB), static_cast<int*>(ptrC), M, N, K);
+    rmm_kernel<<<gridDim, blockDim>>>(static_cast<int*>(ptrA_reduced), static_cast<int*>(ptrB_reduced), static_cast<int*>(ptrC), M, N, K);
 
     cudaEventRecord(comp_end);
     cudaEventSynchronize(comp_end);
@@ -126,14 +140,14 @@ void rmm_gpu(int *matA, int *matB, int *matC, int M, int N, int K)
     cudaEventSynchronize(cpy_D2H_end);
 
     /* Postprocessing (if any) goes here */
-    cudaError_t freeA = cudaFree(ptrA);
+    cudaError_t freeA = cudaFree(ptrA_reduced);
     if(freeA != cudaSuccess) {
-        cout << "Error freeing memory for matA on device: " << cudaGetErrorString(freeA) << endl;
+        cout << "Error freeing memory for matA_reduced on device: " << cudaGetErrorString(freeA) << endl;
     }
 
-    cudaError_t freeB = cudaFree(ptrB);
+    cudaError_t freeB = cudaFree(ptrB_reduced);
     if(freeB != cudaSuccess) {
-        cout << "Error freeing memory for matB on device: " << cudaGetErrorString(freeB) << endl;
+        cout << "Error freeing memory for matB_reduced on device: " << cudaGetErrorString(freeB) << endl;
     }
 
     cudaError_t freeC = cudaFree(ptrC);
